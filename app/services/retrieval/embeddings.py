@@ -10,6 +10,7 @@ _FALLBACK_DIM = 768
 
 _active_model = None
 _model_type: str | None = None
+_model_dim: int | None = None
 
 
 def _probe_gemini():
@@ -17,7 +18,7 @@ def _probe_gemini():
     try:
         model = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-2-preview",
-            google_api_key=settings.GOOGLE_API_KEY,
+            google_api_key=settings.GEMINI_API_KEY,
         )
         model.embed_query("probe")
         logfire.info("Gemini embedding ready (gemini-embedding-2-preview, 3072-dim).")
@@ -31,23 +32,44 @@ def _load_fallback():
     logfire.info("Loading sentence-transformer fallback(all-mpnet-base-v2, 768-dim).")
     return SentenceTransformer("all-mpnet-base-v2")
 
-def _init():
-    global _active_model, _model_type
+def _init(expected_dim: int | None = None):
+    global _active_model, _model_type, _model_dim
+    if expected_dim not in (None, _GEMINI_DIM, _FALLBACK_DIM):
+        raise ValueError(f"Unsupported embedding dimension: {expected_dim}")
+
     if _active_model is not None:
+        if expected_dim is not None and _model_dim != expected_dim:
+            raise ValueError(
+                f"Active embedding model outputs {_model_dim} dimensions, "
+                f"but the Qdrant collection expects {expected_dim}."
+            )
+        return
+
+    if expected_dim == _FALLBACK_DIM:
+        _active_model = _load_fallback()
+        _model_type = "fallback"
+        _model_dim = _FALLBACK_DIM
         return
 
     gemini = _probe_gemini()
     if gemini:
         _active_model = gemini
         _model_type = "gemini"
+        _model_dim = _GEMINI_DIM
+    elif expected_dim == _GEMINI_DIM:
+        raise RuntimeError(
+            "The Qdrant collection expects 3072-dimensional vectors, "
+            "but the Gemini embedding model is unavailable."
+        )
     else:
         _active_model = _load_fallback()
         _model_type = "fallback"
+        _model_dim = _FALLBACK_DIM
 
-def get_embedding_dim() -> int:
-    """Return the vector dimension for the active model. Call after _init()."""
-    _init()
-    return _GEMINI_DIM if _model_type == "gemini" else _FALLBACK_DIM
+def get_embedding_dim(expected_dim: int | None = None) -> int:
+    """Return the active model dimension, optionally matching a Qdrant collection."""
+    _init(expected_dim)
+    return _model_dim
 
 def _embed_batch(batch: list[str]) -> list[list[float]]:
     if _model_type == "gemini":
@@ -72,8 +94,12 @@ def _embed_batch(batch: list[str]) -> list[list[float]]:
     else:
         return _active_model.encode(batch, show_progress_bar=False).tolist()
 
-def embed_query(query: str) -> list[float]:
-    _init()
+def embed_query(query: str, expected_dim: int | None = None) -> list[float]:
+    if expected_dim not in (None, _GEMINI_DIM, _FALLBACK_DIM):
+        raise ValueError(f"Unsupported embedding dimension: {expected_dim}")
+
+    _init(expected_dim)
+
     if _model_type == "gemini":
         return _active_model.embed_query(query)
     return _active_model.encode([query])[0].tolist()

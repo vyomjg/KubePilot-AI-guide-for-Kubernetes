@@ -1,8 +1,7 @@
 import logfire
 from qdrant_client import QdrantClient
-from qdrant_client.http import models
 from app.config import settings
-from app.services.retrieval.embedding import embed_query
+from app.services.retrieval.embeddings import embed_query
 
 
 # Initialize Qdrant Client
@@ -17,7 +16,15 @@ def search_enterprise_knowledge(query: str, limit: int = 8):
     Uses the modern query_points interface.
     """
     try:
-        query_vector = embed_query(query)
+        collection = client.get_collection(settings.QDRANT_COLLECTION)
+        vectors_config = collection.config.params.vectors
+        if isinstance(vectors_config, dict):
+            raise ValueError(
+                "Named Qdrant vectors require an explicit embedding-vector configuration."
+            )
+
+        vector_size = vectors_config.size
+        query_vector = embed_query(query, expected_dim=vector_size)
 
         # Using query_points - the modern standard for Qdrant
         response = client.query_points(

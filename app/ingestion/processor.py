@@ -139,6 +139,15 @@ def run_universal_ingestion(base_dir: str, explicit_source_type: str = None, wip
                 f"Created collection '{settings.QDRANT_COLLECTION}' "
                 f"({dim}-dim, Cosine)."
             )
+        else:
+            vectors_config = qdrant_client.get_collection(
+                settings.QDRANT_COLLECTION
+            ).config.params.vectors
+            if isinstance(vectors_config, dict):
+                raise ValueError(
+                    "Named Qdrant vectors require an explicit embedding-vector configuration."
+                )
+            get_embedding_dim(expected_dim=vectors_config.size)
 
         # Route to sub-folders or treat the whole dir as one source
         subdirs = [
